@@ -198,34 +198,48 @@ export default function App() {
 
   // --- Data Sync ---
   useEffect(() => {
-  if (!authUser) return;
-  
-  const unsubUsers = onSnapshot(
-    collection(db, 'users'), 
-    (snap) => {
-      const loadedUsers = [];
-      snap.forEach(docSnap => loadedUsers.push({ id: docSnap.id, ...docSnap.data() }));
-      if (loadedUsers.length === 0) {
-        console.log('No users, creating initial users...'); // ← 加這行
-        INITIAL_USERS.forEach(u => setDoc(doc(db, 'users', u.id), u));
-      } else {
-        setUsers(loadedUsers);
+    if (!authUser) return;
+    
+    // 先從 localStorage 讀快取（如果有的話）
+    const cachedUsers = localStorage.getItem('cachedUsers');
+    if (cachedUsers) {
+      try {
+        setUsers(JSON.parse(cachedUsers));
+      } catch (e) {
+        console.log('Cache parse error:', e);
       }
     }
-  );
-  
-  const unsubSettings = onSnapshot(
-    doc(db, 'settings', 'config'),
-    (docSnap) => {
-      if (docSnap.exists()) setSettings(docSnap.data());
-    }
-  );
-  
-  return () => {
-    unsubUsers();
-    unsubSettings();
-  };
-}, [authUser]);
+    
+    const unsubUsers = onSnapshot(
+      collection(db, 'users'),
+      (snap) => {
+        const loadedUsers = [];
+        snap.forEach(docSnap => {
+          loadedUsers.push({ id: docSnap.id, ...docSnap.data() });
+        });
+        
+        if (loadedUsers.length === 0) {
+          INITIAL_USERS.forEach(u => setDoc(doc(db, 'users', u.id), u));
+        } else {
+          setUsers(loadedUsers);
+          // 存到 localStorage
+          localStorage.setItem('cachedUsers', JSON.stringify(loadedUsers));
+        }
+      }
+    );
+    
+    const unsubSettings = onSnapshot(
+      doc(db, 'settings', 'config'),
+      (docSnap) => {
+        if (docSnap.exists()) setSettings(docSnap.data());
+      }
+    );
+    
+    return () => {
+      unsubUsers();
+      unsubSettings();
+    };
+  }, [authUser]);
 
 
   // --- Logic Helpers ---
