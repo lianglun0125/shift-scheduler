@@ -200,14 +200,14 @@ export default function App() {
   useEffect(() => {
     if (!authUser) return;
     const unsubUsers = onSnapshot(
-      collection(db, 'artifacts', appId, 'public', 'data', 'users'), 
+      collection(db, 'artifacts', 'public', 'data', 'users'), 
       (snap) => {
         const loadedUsers = [];
         snap.forEach(docSnap => loadedUsers.push({ id: docSnap.id, ...docSnap.data() }));
         
         if (loadedUsers.length === 0) {
           INITIAL_USERS.forEach(u => 
-            setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', u.id), u)
+            setDoc(doc(db, 'artifacts', 'public', 'data', 'users', u.id), u)
           );
         } else {
           setUsers(loadedUsers);
@@ -271,19 +271,6 @@ export default function App() {
     if (!user) return COLORS[0];
     return COLORS[user.colorIdx % COLORS.length];
   };
-
-  // 檢查某人某天是否休假（直接檢查完整 shifts 物件，而不是依賴狀態延遲）
-  const isUserOffDay = (dateStr, userId, shiftsMap) => {
-    const dayShifts = shiftsMap[dateStr] || [];
-    return dayShifts.some(s => s.userId === userId && s.type === 'O');
-  };
-
-  // 檢查某人某天是否已排班（包括早班、晚班、休假）
-  const getUserShiftsForDay = (dateStr, userId, shiftsMap) => {
-    const dayShifts = shiftsMap[dateStr] || [];
-    return dayShifts.filter(s => s.userId === userId);
-  };
-
 
   // --- Admin Actions: Shifts ---
   const assignShift = async (dateStr, userId, typeId) => {
