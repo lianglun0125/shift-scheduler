@@ -206,6 +206,7 @@ export default function App() {
       const loadedUsers = [];
       snap.forEach(docSnap => loadedUsers.push({ id: docSnap.id, ...docSnap.data() }));
       if (loadedUsers.length === 0) {
+        console.log('No users, creating initial users...'); // ← 加這行
         INITIAL_USERS.forEach(u => setDoc(doc(db, 'users', u.id), u));
       } else {
         setUsers(loadedUsers);
