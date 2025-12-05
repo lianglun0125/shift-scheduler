@@ -250,7 +250,7 @@ export default function App() {
       unsubAvail(); 
       unsubSettings();
     };
-  }, [authUser, currentUser, appId]);
+  }, [authUser, currentUser]);
 
 
   // --- Logic Helpers ---
