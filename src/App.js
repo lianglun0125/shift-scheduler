@@ -199,21 +199,25 @@ export default function App() {
   // --- Data Sync ---
   useEffect(() => {
     if (!authUser) return;
+    
     const unsubUsers = onSnapshot(
-      collection(db, 'artifacts', 'public', 'data', 'users'), 
+      collection(db, 'users'),  // ← 改成 1 段：users
       (snap) => {
         const loadedUsers = [];
         snap.forEach(docSnap => loadedUsers.push({ id: docSnap.id, ...docSnap.data() }));
         
         if (loadedUsers.length === 0) {
           INITIAL_USERS.forEach(u => 
-            setDoc(doc(db, 'artifacts', 'public', 'data', 'users', u.id), u)
+            setDoc(doc(db, 'users', u.id), u)  // ← 這裡也要改
           );
         } else {
           setUsers(loadedUsers);
         }
       }
     );
+    
+    return () => unsubUsers();
+  }, [authUser]);
 
     const unsubShifts = onSnapshot(
       collection(db, 'artifacts', appId, 'public', 'data', 'shifts'), 
