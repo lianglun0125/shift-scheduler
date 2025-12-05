@@ -198,63 +198,33 @@ export default function App() {
 
   // --- Data Sync ---
   useEffect(() => {
-    if (!authUser) return;
-    
-    const unsubUsers = onSnapshot(
-      collection(db, 'users'),  // ← 改成 1 段：users
-      (snap) => {
-        const loadedUsers = [];
-        snap.forEach(docSnap => loadedUsers.push({ id: docSnap.id, ...docSnap.data() }));
-        
-        if (loadedUsers.length === 0) {
-          INITIAL_USERS.forEach(u => 
-            setDoc(doc(db, 'users', u.id), u)  // ← 這裡也要改
-          );
-        } else {
-          setUsers(loadedUsers);
-        }
+  if (!authUser) return;
+  
+  const unsubUsers = onSnapshot(
+    collection(db, 'users'), 
+    (snap) => {
+      const loadedUsers = [];
+      snap.forEach(docSnap => loadedUsers.push({ id: docSnap.id, ...docSnap.data() }));
+      if (loadedUsers.length === 0) {
+        INITIAL_USERS.forEach(u => setDoc(doc(db, 'users', u.id), u));
+      } else {
+        setUsers(loadedUsers);
       }
-    );
-    
-    return () => unsubUsers();
-  }, [authUser]);
-
-    const unsubShifts = onSnapshot(
-      collection(db, 'artifacts', appId, 'public', 'data', 'shifts'), 
-      (snap) => {
-        const formattedShifts = {};
-        snap.forEach(d => {
-          const data = d.data();
-          if (!formattedShifts[data.date]) formattedShifts[data.date] = [];
-          formattedShifts[data.date].push({ id: d.id, ...data });
-        });
-        setShifts(formattedShifts);
-      }
-    );
-
-    const unsubAvail = onSnapshot(
-      collection(db, 'artifacts', appId, 'public', 'data', 'availability'), 
-      (snap) => {
-        const availMap = {};
-        snap.forEach(docSnap => { availMap[docSnap.id] = docSnap.data(); });
-        setAvailability(availMap);
-      }
-    );
-
-    const unsubSettings = onSnapshot(
-      doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), 
-      (docSnap) => {
-        if (docSnap.exists()) setSettings(docSnap.data());
-      }
-    );
-
-    return () => {
-      unsubUsers(); 
-      unsubShifts(); 
-      unsubAvail(); 
-      unsubSettings();
-    };
-  }, [authUser, currentUser]);
+    }
+  );
+  
+  const unsubSettings = onSnapshot(
+    doc(db, 'settings', 'config'),
+    (docSnap) => {
+      if (docSnap.exists()) setSettings(docSnap.data());
+    }
+  );
+  
+  return () => {
+    unsubUsers();
+    unsubSettings();
+  };
+}, [authUser]);
 
 
   // --- Logic Helpers ---
