@@ -177,8 +177,12 @@ export default function App() {
   const [authUser, setAuthUser] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
   
-  // Data State - 立即用快取初始化
-  const [users, setUsers] = useState(getCachedUsers());
+  // Data State - 立即用快取初始化，無快取時用預設值秒出現！
+  const [users, setUsers] = useState(() => {
+    const cached = getCachedUsers();
+    // ✅ 優先順序：快取 > 預設值 > 空陣列（永遠有東西可以渲染）
+    return cached.length > 0 ? cached : INITIAL_USERS;
+  });
   const [shifts, setShifts] = useState(getCachedShifts());
   const [availability, setAvailability] = useState(getCachedAvailability());
   const [settings, setSettings] = useState({
@@ -232,7 +236,7 @@ export default function App() {
   useEffect(() => {
     if (!authUser) return;
     
-    // 用戶數據 - 加入錯誤處理 + 快取容錯
+    // 用戶數據 - 增量更新邏輯（有資料就更新，沒資料絕不清空）
     const unsubUsers = onSnapshot(
       collection(db, 'users'),
       (snap) => {
@@ -241,20 +245,15 @@ export default function App() {
           loadedUsers.push({ id: docSnap.id, ...docSnap.data() });
         });
         
-        if (loadedUsers.length === 0) {
-          INITIAL_USERS.forEach(u => setDoc(doc(db, 'users', u.id), u));
-        } else {
+        // ✅ 有 Firestore 資料時才更新，沒有就保留快取或預設值（不清空）
+        if (loadedUsers.length > 0) {
           setUsers(loadedUsers);
           localStorage.setItem('shift_scheduler_users', JSON.stringify(loadedUsers));
         }
       },
       (error) => {
-        // Firestore 錯誤時，用快取繼續運作
+        // ✅ Firestore 失敗時什麼都不做，保留已有的 users state
         console.error('Firestore users error:', error);
-        const cachedUsers = getCachedUsers();
-        if (cachedUsers.length > 0) {
-          setUsers(cachedUsers);
-        }
       }
     );
     
