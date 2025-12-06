@@ -28,7 +28,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = 'shift-scheduler-12yun';
 
 
 // --- Time Helpers for Shifts (分鐘制) ---
@@ -113,6 +112,38 @@ const INITIAL_USERS = [
 ];
 
 
+// --- Cache Helpers ---
+const getCachedUsers = () => {
+  try {
+    const cached = localStorage.getItem('shift_scheduler_users');
+    return cached ? JSON.parse(cached) : [];
+  } catch (e) {
+    console.log('Cache read error:', e);
+    return [];
+  }
+};
+
+const getCachedShifts = () => {
+  try {
+    const cached = localStorage.getItem('shift_scheduler_shifts');
+    return cached ? JSON.parse(cached) : {};
+  } catch (e) {
+    console.log('Cache read error:', e);
+    return {};
+  }
+};
+
+const getCachedAvailability = () => {
+  try {
+    const cached = localStorage.getItem('shift_scheduler_availability');
+    return cached ? JSON.parse(cached) : {};
+  } catch (e) {
+    console.log('Cache read error:', e);
+    return {};
+  }
+};
+
+
 // --- Components ---
 const RoleSwitcher = ({ currentUser, users, onLoginClick }) => (
   <div className="flex overflow-x-auto gap-2 p-4 bg-[#F4F4F0] border-b border-[#E0E0D8] no-scrollbar">
@@ -141,24 +172,15 @@ const RoleSwitcher = ({ currentUser, users, onLoginClick }) => (
   </div>
 );
 
-const getCachedUsers = () => {
-  try {
-    const cached = localStorage.getItem('shift_scheduler_users');
-    return cached ? JSON.parse(cached) : [];
-  } catch (e) {
-    console.log('Cache read error:', e);
-    return [];
-  }
-};
 
 export default function App() {
   const [authUser, setAuthUser] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
   
-  // Data State
+  // Data State - 立即用快取初始化
   const [users, setUsers] = useState(getCachedUsers());
-  const [shifts, setShifts] = useState({});
-  const [availability, setAvailability] = useState({}); 
+  const [shifts, setShifts] = useState(getCachedShifts());
+  const [availability, setAvailability] = useState(getCachedAvailability());
   const [settings, setSettings] = useState({
     openStart: '2023-01-01T00:00',
     openEnd: '2030-12-31T23:59',
@@ -185,6 +207,7 @@ export default function App() {
   const [isChangingDefaultPin, setIsChangingDefaultPin] = useState(false);
   const [newPin, setNewPin] = useState('');
   const [newPinConfirm, setNewPinConfirm] = useState('');
+  const [isSubmittingPin, setIsSubmittingPin] = useState(false);  // ← 新增
 
 
   // --- Initialization ---
@@ -209,6 +232,7 @@ export default function App() {
   useEffect(() => {
     if (!authUser) return;
     
+    // 用戶數據
     const unsubUsers = onSnapshot(
       collection(db, 'users'),
       (snap) => {
@@ -221,9 +245,38 @@ export default function App() {
           INITIAL_USERS.forEach(u => setDoc(doc(db, 'users', u.id), u));
         } else {
           setUsers(loadedUsers);
-          // 更新快取
           localStorage.setItem('shift_scheduler_users', JSON.stringify(loadedUsers));
         }
+      }
+    );
+    
+    // 班表數據
+    const unsubShifts = onSnapshot(
+      collection(db, 'shifts'),
+      (snap) => {
+        const loadedShifts = {};
+        snap.forEach(docSnap => {
+          const shift = { id: docSnap.id, ...docSnap.data() };
+          const dateStr = shift.date;
+          if (!loadedShifts[dateStr]) loadedShifts[dateStr] = [];
+          loadedShifts[dateStr].push(shift);
+        });
+        setShifts(loadedShifts);
+        localStorage.setItem('shift_scheduler_shifts', JSON.stringify(loadedShifts));
+      }
+    );
+    
+    // 可排狀態數據
+    const unsubAvailability = onSnapshot(
+      collection(db, 'availability'),
+      (snap) => {
+        const loadedAvailability = {};
+        snap.forEach(docSnap => {
+          const avail = { id: docSnap.id, ...docSnap.data() };
+          loadedAvailability[avail.id] = avail;
+        });
+        setAvailability(loadedAvailability);
+        localStorage.setItem('shift_scheduler_availability', JSON.stringify(loadedAvailability));
       }
     );
     
@@ -236,6 +289,8 @@ export default function App() {
     
     return () => {
       unsubUsers();
+      unsubShifts();
+      unsubAvailability();
       unsubSettings();
     };
   }, [authUser]);
@@ -361,7 +416,6 @@ export default function App() {
     }
   };
 
-
   const batchFill = async () => {
     try {
       const batch = writeBatch(db);
@@ -376,7 +430,6 @@ export default function App() {
         const dateStr = formatDate(year, month, d);
         const dayShifts = shifts[dateStr] || [];
 
-        // 統計當天可排的員工清單（無班、無休假、無全天不可排、勾選該班別時段）
         const eligibleForMorning = [];
         const eligibleForEvening = [];
 
@@ -393,31 +446,24 @@ export default function App() {
             const isNormalAvail = availData?.mode === 'normal';
             const allowedSlots = availData?.slots || [];
 
-            // 都有班或都有休假 → 跳過
             if (hasAnyShift || hasOffShift || isFullUnavailable) {
               return;
             }
 
-            // 檢查是否能排早班
             if (!isNormalAvail || allowedSlots.includes('morning')) {
               eligibleForMorning.push(user);
             }
 
-            // 檢查是否能排晚班
             if (!isNormalAvail || allowedSlots.includes('evening')) {
               eligibleForEvening.push(user);
             }
           });
 
-        // 當天早班已排人數
         const morningCount = dayShifts.filter(s => s.type === 'M').length;
-        // 當天晚班已排人數
         const eveningCount = dayShifts.filter(s => s.type === 'E').length;
 
-        // 隨機選擇早班（最多補到 2 人，條件是人數 > 需求時隨機選）
         if (morningCount < 2 && eligibleForMorning.length > 0) {
           const needMorning = 2 - morningCount;
-          // 若可排人數超過需求，隨機選擇；否則全選
           const selectedMorning = eligibleForMorning.length > needMorning 
             ? randomSelect(eligibleForMorning, needMorning)
             : eligibleForMorning;
@@ -436,10 +482,8 @@ export default function App() {
           });
         }
 
-        // 隨機選擇晚班（最多補到 2 人，條件是人數 > 需求時隨機選）
         if (eveningCount < 2 && eligibleForEvening.length > 0) {
           const needEvening = 2 - eveningCount;
-          // 若可排人數超過需求，隨機選擇；否則全選
           const selectedEvening = eligibleForEvening.length > needEvening 
             ? randomSelect(eligibleForEvening, needEvening)
             : eligibleForEvening;
@@ -465,7 +509,6 @@ export default function App() {
   };
   
   const clearMonth = async () => {
-    console.log('clearMonth clicked');
     if (!window.confirm('確定要清空本月所有班表嗎？此動作無法復原。')) return;
     try {
       const year = currentDate.getFullYear();
@@ -474,7 +517,6 @@ export default function App() {
       let deleteCount = 0;
 
       const allShifts = Object.values(shifts).flat();
-      console.log('shifts when clearing', allShifts);
 
       allShifts.forEach(shift => {
         const sDate = new Date(shift.date);
@@ -522,17 +564,14 @@ export default function App() {
   };
 
   const deleteUser = async (userId) => {
-    console.log('deleteUser clicked', userId);
     if (!window.confirm('確定要刪除此員工嗎？')) return;
     try {
       await deleteDoc(doc(db, 'users', userId));
-      console.log('User deleted', userId);
     } catch (e) {
       console.error("Delete user error:", e);
       alert('刪除失敗，請稍後再試');
     }
   };
-
 
   // --- User Actions: Availability ---
   const openAvailabilityModal = (dateStr) => {
@@ -544,7 +583,6 @@ export default function App() {
       setAvailabilityMode('normal');
       setSelectedAvailSlots([]);
     } else {
-      // 判斷是全天可排、全天不可排、或正常選擇
       if (availData.mode === 'full_available') {
         setAvailabilityMode('full_available');
         setSelectedAvailSlots([]);
@@ -606,6 +644,7 @@ export default function App() {
     setIsChangingDefaultPin(false);
     setNewPin('');
     setNewPinConfirm('');
+    setIsSubmittingPin(false);
   };
 
   const handleLoginSubmit = () => {
@@ -620,11 +659,9 @@ export default function App() {
       return;
     }
     if (storedPin === '000000') {
-      // 使用預設 PIN，強制進入修改 PIN 步驟
       setIsChangingDefaultPin(true);
       setLoginError('');
     } else {
-      // 一般登入完成
       setCurrentUser(loginTargetUser);
       setShowLoginModal(false);
     }
@@ -641,12 +678,14 @@ export default function App() {
       return;
     }
     
+    setIsSubmittingPin(true);  // ← 開始提交
     try {
       const userRef = doc(db, 'users', loginTargetUser.id);
       await setDoc(userRef, { pin: newPin }, { merge: true });
       
-      // 成功後再更新 state 和關閉 modal
-      setCurrentUser({ ...loginTargetUser, pin: newPin });
+      // 成功後更新 state
+      const updatedUser = { ...loginTargetUser, pin: newPin };
+      setCurrentUser(updatedUser);
       setShowLoginModal(false);
       setLoginPin('');
       setNewPin('');
@@ -655,6 +694,8 @@ export default function App() {
     } catch (e) {
       console.error('Update PIN error:', e);
       setLoginError(`更新 PIN 失敗: ${e.message}`);
+    } finally {
+      setIsSubmittingPin(false);  // ← 結束提交
     }
   };
 
@@ -682,7 +723,6 @@ export default function App() {
           map[user.id] = { userId: user.id, name: user.name, minutes: 0 };
         }
 
-        // 休假或沒有時間的班不計入時數
         if (shift.type === 'O' || shift.startTime == null || shift.endTime == null) return;
 
         const diff = shift.endTime - shift.startTime;
@@ -699,7 +739,6 @@ export default function App() {
       }))
       .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
   }, [shifts, users, currentDate]);
-
 
   // --- Render Helpers ---
   const renderCalendar = () => {
@@ -718,7 +757,6 @@ export default function App() {
       const isToday = new Date().toDateString() === new Date(year, month, d).toDateString();
       let dayShifts = shifts[dateStr] || [];
 
-      // 按員工、班別排序
       dayShifts.sort((a, b) => {
         if (a.userId !== b.userId) return a.userId.localeCompare(b.userId);
         return (a.startTime ?? 0) - (b.startTime ?? 0);
@@ -730,7 +768,6 @@ export default function App() {
       let bgClass = "bg-white";
       let statusIcon = null;
 
-      // 顯示員工可排狀態
       if (currentUser?.role === 'user' && activeTab === 'availability') {
         if (myAvailData?.mode === 'full_available') {
           bgClass = "bg-emerald-50";
@@ -747,13 +784,7 @@ export default function App() {
       const handleDayClick = () => {
         if (currentUser?.role === 'admin' && activeTab === 'admin') {
           if (selectedUserForAssign && selectedShiftType) {
-            // 如果選的是「休假」，直接排休假
-            if (selectedShiftType === 'O') {
-              assignShift(dateStr, selectedUserForAssign, 'O');
-            } else {
-              // 如果要排班（早班/晚班），檢查是否已有該班次
-              assignShift(dateStr, selectedUserForAssign, selectedShiftType);
-            }
+            assignShift(dateStr, selectedUserForAssign, selectedShiftType);
           }
         } else if (currentUser?.role === 'user' && activeTab === 'availability') {
           openAvailabilityModal(dateStr);
@@ -787,7 +818,6 @@ export default function App() {
                 ? `${formatMinutes(shift.startTime)}-${formatMinutes(shift.endTime)}`
                 : '';
               
-              // 如果是休假，特別顯示
               if (shift.type === 'O') {
                 return (
                   <div 
@@ -876,7 +906,6 @@ export default function App() {
         </div>
       </header>
 
-
       {/* Admin Toolbar */}
       {currentUser?.role === 'admin' && activeTab === 'admin' && (
         <div className="bg-white border-b border-stone-200 p-4 shadow-sm animate-in slide-in-from-top-2">
@@ -949,7 +978,6 @@ export default function App() {
         </div>
       )}
 
-
       {/* User Availability Toolbar */}
       {currentUser?.role === 'user' && activeTab === 'availability' && (
         <div className="bg-white border-b border-stone-200 p-4 shadow-sm animate-in slide-in-from-top-2">
@@ -1021,7 +1049,6 @@ export default function App() {
           )}
         </div>
       </main>
-
 
       {/* Bottom Nav */}
       <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-stone-100 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] pb-safe">
@@ -1169,7 +1196,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Availability Modal (New: 10AM-2PM / 5:30PM-9:30PM) */}
+      {/* Availability Modal */}
       {selectedDay && activeTab === 'availability' && currentUser?.role === 'user' && isAvailabilityOpen() && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-stone-900/10 backdrop-blur-sm">
           <div className="bg-white w-full max-w-sm rounded-xl shadow-2xl border border-stone-100 p-5 animate-in slide-in-from-bottom-10">
@@ -1178,7 +1205,6 @@ export default function App() {
               <p className="text-xs text-stone-400">請選擇您能排班的時段</p>
             </div>
             
-            {/* Mode Selection */}
             <div className="grid grid-cols-3 gap-2 mb-4">
               <button
                 onClick={() => setAvailabilityMode('full_available')}
@@ -1215,7 +1241,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* Time Slot Selection */}
             {availabilityMode === 'normal' && (
               <div className="mb-4 space-y-2">
                 <p className="text-xs font-semibold text-stone-600">選擇可排的時段</p>
@@ -1346,9 +1371,17 @@ export default function App() {
                 )}
                 <button
                   onClick={handleChangePinSubmit}
-                  className="w-full py-2.5 text-sm font-medium text-white bg-stone-800 rounded-lg hover:bg-stone-900 transition-colors"
+                  disabled={isSubmittingPin}
+                  className="w-full py-2.5 text-sm font-medium text-white bg-stone-800 rounded-lg hover:bg-stone-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
-                  儲存新 PIN 並登入
+                  {isSubmittingPin ? (
+                    <>
+                      <span className="inline-block w-4 h-4 border-2 border-white border-r-transparent rounded-full animate-spin"></span>
+                      正在儲存...
+                    </>
+                  ) : (
+                    '儲存新 PIN 並登入'
+                  )}
                 </button>
               </>
             )}
