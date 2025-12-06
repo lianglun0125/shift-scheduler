@@ -232,7 +232,7 @@ export default function App() {
   useEffect(() => {
     if (!authUser) return;
     
-    // 用戶數據
+    // 用戶數據 - 加入錯誤處理 + 快取容錯
     const unsubUsers = onSnapshot(
       collection(db, 'users'),
       (snap) => {
@@ -246,6 +246,14 @@ export default function App() {
         } else {
           setUsers(loadedUsers);
           localStorage.setItem('shift_scheduler_users', JSON.stringify(loadedUsers));
+        }
+      },
+      (error) => {
+        // Firestore 錯誤時，用快取繼續運作
+        console.error('Firestore users error:', error);
+        const cachedUsers = getCachedUsers();
+        if (cachedUsers.length > 0) {
+          setUsers(cachedUsers);
         }
       }
     );
@@ -678,24 +686,39 @@ export default function App() {
       return;
     }
     
-    setIsSubmittingPin(true);  // ← 開始提交
+    setIsSubmittingPin(true);
+    
     try {
-      const userRef = doc(db, 'users', loginTargetUser.id);
-      await setDoc(userRef, { pin: newPin }, { merge: true });
-      
-      // 成功後更新 state
+      // 1️⃣ 樂觀更新（馬上更新 UI，不等 Firestore）
       const updatedUser = { ...loginTargetUser, pin: newPin };
       setCurrentUser(updatedUser);
+      
+      // 2️⃣ 更新快取
+      const updatedUsers = users.map(u => 
+        u.id === loginTargetUser.id ? updatedUser : u
+      );
+      setUsers(updatedUsers);
+      localStorage.setItem('shift_scheduler_users', JSON.stringify(updatedUsers));
+      
+      // 3️⃣ 立即關閉 modal（不等 Firestore）
       setShowLoginModal(false);
       setLoginPin('');
       setNewPin('');
       setNewPinConfirm('');
       setIsChangingDefaultPin(false);
+      
+      // 4️⃣ 後台寫入 Firestore（不阻塞 UI）
+      const userRef = doc(db, 'users', loginTargetUser.id);
+      setDoc(userRef, { pin: newPin }, { merge: true }).catch(e => {
+        console.error('PIN save to Firestore failed:', e);
+        setLoginError('PIN 保存失敗，已本地保存，請重試');
+      });
+      
     } catch (e) {
       console.error('Update PIN error:', e);
       setLoginError(`更新 PIN 失敗: ${e.message}`);
     } finally {
-      setIsSubmittingPin(false);  // ← 結束提交
+      setIsSubmittingPin(false);
     }
   };
 
