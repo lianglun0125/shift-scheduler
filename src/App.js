@@ -141,13 +141,22 @@ const RoleSwitcher = ({ currentUser, users, onLoginClick }) => (
   </div>
 );
 
+const getCachedUsers = () => {
+  try {
+    const cached = localStorage.getItem('shift_scheduler_users');
+    return cached ? JSON.parse(cached) : [];
+  } catch (e) {
+    console.log('Cache read error:', e);
+    return [];
+  }
+};
 
 export default function App() {
   const [authUser, setAuthUser] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
   
   // Data State
-  const [users, setUsers] = useState([]);
+  const [users, setUsers] = useState(getCachedUsers());
   const [shifts, setShifts] = useState({});
   const [availability, setAvailability] = useState({}); 
   const [settings, setSettings] = useState({
@@ -200,16 +209,6 @@ export default function App() {
   useEffect(() => {
     if (!authUser) return;
     
-    // 先從 localStorage 讀快取（如果有的話）
-    const cachedUsers = localStorage.getItem('cachedUsers');
-    if (cachedUsers) {
-      try {
-        setUsers(JSON.parse(cachedUsers));
-      } catch (e) {
-        console.log('Cache parse error:', e);
-      }
-    }
-    
     const unsubUsers = onSnapshot(
       collection(db, 'users'),
       (snap) => {
@@ -222,8 +221,8 @@ export default function App() {
           INITIAL_USERS.forEach(u => setDoc(doc(db, 'users', u.id), u));
         } else {
           setUsers(loadedUsers);
-          // 存到 localStorage
-          localStorage.setItem('cachedUsers', JSON.stringify(loadedUsers));
+          // 更新快取
+          localStorage.setItem('shift_scheduler_users', JSON.stringify(loadedUsers));
         }
       }
     );
@@ -641,14 +640,21 @@ export default function App() {
       setLoginError('兩次輸入的 PIN 不一致');
       return;
     }
+    
     try {
       const userRef = doc(db, 'users', loginTargetUser.id);
       await setDoc(userRef, { pin: newPin }, { merge: true });
+      
+      // 成功後再更新 state 和關閉 modal
       setCurrentUser({ ...loginTargetUser, pin: newPin });
       setShowLoginModal(false);
+      setLoginPin('');
+      setNewPin('');
+      setNewPinConfirm('');
+      setIsChangingDefaultPin(false);
     } catch (e) {
       console.error('Update PIN error:', e);
-      setLoginError('更新 PIN 失敗，請稍後再試');
+      setLoginError(`更新 PIN 失敗: ${e.message}`);
     }
   };
 
